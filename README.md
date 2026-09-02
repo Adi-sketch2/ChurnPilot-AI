@@ -1,4 +1,4 @@
-# Customer Segmentation & Churn Prediction
+~# Customer Segmentation & Churn Prediction
 
 An end-to-end Machine Learning project that combines **unsupervised** and **supervised** learning to help a business identify which customers are likely to churn — and which segment they belong to — so retention actions can be prioritized effectively.
 
