@@ -11,7 +11,10 @@ An end-to-end Machine Learning project that combines **unsupervised** and **supe
 - [x] Churn Prediction (Classification)
 - [x] Combined Risk Labeling
 - [x] Interactive Dashboard & Explainability (SHAP)
-- [ ] Deployment (in progress)
+- [x] Deployment (Streamlit Community Cloud)
+- [x] Agentic Layer — Churn Analyst Agent (Gemini + Tool Calling)
+
+**Live App**: [customer-churn-segmentation-byaditya.streamlit.app](https://customer-churn-segmentation-byaditya.streamlit.app/)
 
 ---
 
@@ -36,11 +39,18 @@ Acquiring a new customer costs more than retaining an existing one. This project
 data_cleaning.ipynb     -> Load raw data, clean (missing values, encoding), save cleaned_telco_data.csv
 segmentation.ipynb      -> PCA + K-Means clustering, segment analysis
 classification.ipynb    -> Train-test split, XGBoost churn model (tuned), feature importance, saved model
-app.py                  -> Streamlit dashboard app: segmentation + classification + SHAP explainability, single-customer predictor (deployment details to follow)
+app.py                  -> Streamlit dashboard app: segmentation + classification + SHAP explainability + Churn Analyst Agent
 picklefiles/            -> Saved model/encoder objects (onehot_encoder, scaler, pca, kmeans, churn_model)
+.env                    -> Local-only file holding GOOGLE_API_KEY (not committed; see Setup below)
 ```
 
 **Run order**: `data_cleaning.ipynb` -> `segmentation.ipynb` -> `classification.ipynb`
+
+**Local setup for the Agentic layer**: create a `.env` file in the project root with:
+```
+GOOGLE_API_KEY=your-gemini-api-key
+```
+(On Streamlit Community Cloud, this is instead set via the app's Secrets settings.)
 
 ---
 
@@ -74,8 +84,6 @@ picklefiles/            -> Saved model/encoder objects (onehot_encoder, scaler, 
 | 3 | Internet-Only, No Phone | 32 mo | Rs.42 | ~25% | 10% |
 
 **Key insight**: Segment 2 is both the largest and highest-risk group — retention efforts should prioritize this segment.
-
-Full write-up: see `segmentation_analysis.md`.
 
 ---
 
@@ -134,6 +142,21 @@ Each section is rendered in its own bordered card (`st.container(border=True)`) 
 
 ---
 
+## 6. Agentic Layer — Churn Analyst Agent
+
+Beyond static prediction and explanation, the app includes an **AI agent** that reasons over a prediction and decides what to do next, rather than just describing it. This is built with the **Gemini API's tool-calling (function-calling) feature** — Gemini is given the customer's segment, risk level, churn probability, and top SHAP factors, along with a set of Python functions ("tools") it can choose to call.
+
+**The flow**: Predict → Interpret → Decide → Act
+1. **Interpret**: Gemini explains, in plain language, *why* this customer has this risk level, grounded in the SHAP factors already computed.
+2. **Decide**: Gemini calls `check_retention_priority(risk_level, monthly_charges)` — a deterministic business-rule function (not something the model should guess on its own) that returns a priority level (e.g. "URGENT", "MEDIUM PRIORITY", "NO ACTION NEEDED").
+3. **Act**: If the priority indicates action is needed, Gemini calls `draft_retention_email(segment, priority, key_reasons)`, which fills a template with the customer's context to produce a ready-to-review retention email.
+
+Gemini decides *whether* and *in what order* to call these tools — the sequence is not hardcoded with `if/else`. The important distinction: Gemini never executes the functions itself; it only requests a call, and the `google-genai` SDK's automatic function calling executes the actual Python function locally and returns the result back to the model to continue reasoning.
+
+This turns the tool from a pure prediction dashboard into a lightweight decision-support system.
+
+---
+
 ## Tech Stack
 
 | Component | Tool |
@@ -143,14 +166,9 @@ Each section is rendered in its own bordered card (`st.container(border=True)`) 
 | Clustering | K-Means (scikit-learn) |
 | Classification | XGBoost, tuned with RandomizedSearchCV |
 | Explainability | SHAP (TreeExplainer) |
+| Agentic Layer | Google Gemini API (`google-genai`), tool/function calling |
+| Config | `python-dotenv` (local `.env` for API keys) |
 | Visualization | Matplotlib, Plotly |
 | App Interface | Streamlit |
-| Deployment | To be added |
+| Deployment | Streamlit Community Cloud |
 
----
-
-## Team Notes
-
-- This README is updated as each module is completed — check the Project Status checklist above for current progress.
-- Deployment section will be added once live and hosted — link will be shared here after that.
-- Any doubts on a specific stage — flag it in the group so we can go over it together.
