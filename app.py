@@ -334,7 +334,7 @@ def draft_retention_email(segment: str, priority: str, key_reasons: str) -> str:
 
 Dear Customer,
 
-We noticed a few things about your account that made us want to reach out personally. As a valued member of our {segment} customer group, your experience with us matters a lot.
+We noticed a few things about your account that made us want to reach out personally. As a valued member of our ({segment})customer group, your experience with us matters a lot.
 
 We understand that factors like {key_reasons} can sometimes make a service feel like it's not the perfect fit anymore — and we'd genuinely like the chance to make it right.
 
@@ -376,12 +376,36 @@ Your task:
 4. Give a short final summary of your recommendation.
 """
 
-    response = genai_client.models.generate_content(
-        model="gemini-2.5-flash",
-        contents=prompt,
-        config={"tools": [check_retention_priority, draft_retention_email]}
-    )
-    return response.text
+    try:
+        response = genai_client.models.generate_content(
+            model="gemini-3.6-flash",
+            contents=prompt,
+            config={"tools": [check_retention_priority, draft_retention_email]}
+        )
+    except Exception as e:
+        return f"⚠️ Agent call failed with an error:\n\n```\n{type(e).__name__}: {e}\n```"
+
+    text = response.text
+
+    if not text:
+        # Some models occasionally return an empty final text after a tool call.
+        # Fall back to manually extracting text from the response, and if that's
+        # also empty, surface the raw response so the issue can be diagnosed.
+        try:
+            parts = response.candidates[0].content.parts
+            text = "\n".join(p.text for p in parts if getattr(p, "text", None))
+        except Exception:
+            text = ""
+
+    if not text:
+        return (
+            "⚠️ The agent call succeeded but returned an empty response "
+            "(a known issue with some Gemini model versions after a tool call). "
+            f"Finish reason: {getattr(response.candidates[0], 'finish_reason', 'unknown') if response.candidates else 'no candidates'}. "
+            "Try clicking Run again, or switch the model to 'gemini-3.6-pro' in the code."
+        )
+
+    return text
 
 
 # ---------------------------------------------------------
@@ -433,6 +457,27 @@ if predict_clicked:
         contract, paperless_billing, payment_method,
         monthly_charges, total_charges
     )
+    # Store everything needed to redraw the results, so it survives the rerun
+    # that happens when the "Run Churn Analyst Agent" button is clicked below.
+    st.session_state['prediction'] = {
+        'segment_name': segment_name,
+        'risk': risk,
+        'churn_prob': churn_prob,
+        'classification_input': classification_input,
+        'tenure': tenure,
+        'monthly_charges': monthly_charges,
+    }
+    # A fresh prediction invalidates any previous agent response.
+    st.session_state.pop('agent_response', None)
+
+if 'prediction' in st.session_state:
+    p = st.session_state['prediction']
+    segment_name = p['segment_name']
+    risk = p['risk']
+    churn_prob = p['churn_prob']
+    classification_input = p['classification_input']
+    tenure = p['tenure']
+    monthly_charges = p['monthly_charges']
 
     risk_class_map = {"High Risk": "risk-high", "Medium Risk": "risk-medium", "Low Risk": "risk-low"}
     emoji_map = {"High Risk": "⚠️", "Medium Risk": "🟡", "Low Risk": "✅"}
@@ -583,7 +628,10 @@ if predict_clicked:
                 agent_response = run_churn_analyst_agent(
                     segment_name, risk, churn_prob, shap_df, monthly_charges
                 )
-            st.markdown(agent_response)
+            st.session_state['agent_response'] = agent_response
+
+        if 'agent_response' in st.session_state:
+            st.markdown(st.session_state['agent_response'])
 
 st.markdown("---")
 st.caption("Built with Streamlit · Segmentation via PCA + K-Means · Churn Prediction via tuned XGBoost")
