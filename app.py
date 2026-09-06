@@ -1,9 +1,14 @@
+import os
 import pandas as pd
 import pickle
 import streamlit as st
 import plotly.graph_objects as go
 import plotly.express as px
 import shap
+from dotenv import load_dotenv
+from google import genai
+
+load_dotenv()
 
 # ---------------------------------------------------------
 # Page config
@@ -264,6 +269,122 @@ def predict_customer(tenure, phone_service, multiple_lines, internet_service,
 
 
 # ---------------------------------------------------------
+# Churn Analyst Agent — Gemini + Tool Calling
+# ---------------------------------------------------------
+@st.cache_resource
+def get_genai_client():
+    # Local development reads from .env; Streamlit Cloud reads from st.secrets.
+    # st.secrets access raises if no secrets.toml exists at all (normal for local dev),
+    # so that lookup is wrapped safely.
+    api_key = os.getenv("GOOGLE_API_KEY")
+    if not api_key:
+        try:
+            api_key = st.secrets.get("GOOGLE_API_KEY", None)
+        except Exception:
+            api_key = None
+    if not api_key:
+        return None
+    return genai.Client(api_key=api_key)
+
+genai_client = get_genai_client()
+
+
+def check_retention_priority(risk_level: str, monthly_charges: float) -> str:
+    """Look up this company's retention-priority policy for a customer, based on
+    their churn risk level and how much they pay per month. This encodes business
+    rules that are not something a language model should guess on its own.
+
+    Args:
+        risk_level: One of "Low Risk", "Medium Risk", "High Risk".
+        monthly_charges: The customer's monthly charges in rupees.
+
+    Returns:
+        A short priority label and recommended action timeline.
+    """
+    if risk_level == "High Risk" and monthly_charges >= 70:
+        return "URGENT: high-value customer at high churn risk. Recommend personalized outreach within 48 hours."
+    elif risk_level == "High Risk":
+        return "HIGH PRIORITY: schedule retention contact within 1 week."
+    elif risk_level == "Medium Risk" and monthly_charges >= 70:
+        return "MEDIUM PRIORITY: high-value customer showing risk signs. Recommend proactive check-in."
+    elif risk_level == "Medium Risk":
+        return "MEDIUM PRIORITY: include in the next standard retention campaign."
+    else:
+        return "NO ACTION NEEDED: customer is low risk."
+
+
+def draft_retention_email(segment: str, priority: str, key_reasons: str) -> str:
+    """Generate a retention email draft using the company's standard template,
+    personalized with the customer's segment and the key factors driving their
+    churn risk. Only call this if check_retention_priority indicated that some
+    action is needed (i.e. priority is not "NO ACTION NEEDED").
+
+    Args:
+        segment: The customer's behavioral segment name.
+        priority: The priority label returned by check_retention_priority.
+        key_reasons: A short, comma-separated description of the top factors
+            driving this customer's churn risk (e.g. "month-to-month contract,
+            fiber optic internet, electronic check payment").
+
+    Returns:
+        A draft email with a subject line and body, ready for a retention agent
+        to review, personalize with the customer's name, and send.
+    """
+    return f"""Subject: We'd love to keep you with us — a quick note
+
+Dear Customer,
+
+We noticed a few things about your account that made us want to reach out personally. As a valued member of our {segment} customer group, your experience with us matters a lot.
+
+We understand that factors like {key_reasons} can sometimes make a service feel like it's not the perfect fit anymore — and we'd genuinely like the chance to make it right.
+
+Based on your account, our team has flagged this as: {priority}
+
+We'd love to offer a personalized plan review or a loyalty discount to make sure you're getting the best value. Could we schedule a quick call this week?
+
+Warm regards,
+Customer Retention Team
+
+---
+[This is an AI-generated draft. Please review, personalize with the customer's actual name and contact details, and approve before sending.]"""
+
+
+def run_churn_analyst_agent(segment_name, risk, churn_prob, shap_df, monthly_charges):
+    """Orchestrates the Churn Analyst Agent: gives Gemini the prediction context
+    and lets it decide, via tool calling, whether retention action is warranted
+    and whether to draft an email."""
+    if genai_client is None:
+        return "⚠️ GOOGLE_API_KEY not found. Add it to your .env file to enable the agent."
+
+    top_reasons = ", ".join([
+        format_feature_label(f, v) for f, v in zip(shap_df['Feature'], shap_df['Value'])
+    ][-4:])
+
+    prompt = f"""You are a Churn Analyst Agent helping a retention team.
+
+Customer data:
+- Behavioral segment: {segment_name}
+- Churn risk level: {risk}
+- Churn probability: {churn_prob:.1%}
+- Monthly charges: ₹{monthly_charges}
+- Top factors influencing this prediction (from SHAP): {top_reasons}
+
+Your task:
+1. In 2-3 sentences, explain in plain language why this customer has this risk level, referencing the SHAP factors.
+2. Call check_retention_priority to determine the recommended action.
+3. If the priority indicates action is needed, call draft_retention_email to produce a draft.
+4. Give a short final summary of your recommendation.
+"""
+
+    response = genai_client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=prompt,
+        config={"tools": [check_retention_priority, draft_retention_email]}
+    )
+    return response.text
+
+
+# ---------------------------------------------------------
 # Header
 # ---------------------------------------------------------
 st.markdown('<div class="main-header">📊 Customer Segmentation & Churn Risk Predictor</div>', unsafe_allow_html=True)
@@ -449,6 +570,20 @@ if predict_clicked:
         )
         fi_fig.update_layout(height=320, margin=dict(t=10, b=10, l=10, r=10), coloraxis_showscale=False)
         st.plotly_chart(fi_fig, use_container_width=True)
+
+    st.write("")
+
+    # ---------------- Row 5: Churn Analyst Agent ----------------
+    with st.container(border=True):
+        st.markdown('<div class="card-label">🤖 Churn Analyst Agent</div>', unsafe_allow_html=True)
+        st.caption("An AI agent that reasons over this prediction, decides if retention action is needed, and can draft an outreach email — using tool calling, not just text generation.")
+
+        if st.button("Run Churn Analyst Agent", use_container_width=True):
+            with st.spinner("Agent is reasoning over this customer's data..."):
+                agent_response = run_churn_analyst_agent(
+                    segment_name, risk, churn_prob, shap_df, monthly_charges
+                )
+            st.markdown(agent_response)
 
 st.markdown("---")
 st.caption("Built with Streamlit · Segmentation via PCA + K-Means · Churn Prediction via tuned XGBoost")
