@@ -354,7 +354,7 @@ def run_churn_analyst_agent(segment_name, risk, churn_prob, shap_df, monthly_cha
     and lets it decide, via tool calling, whether retention action is warranted
     and whether to draft an email."""
     if genai_client is None:
-        return "⚠️ GOOGLE_API_KEY not found. Add it to your .env file to enable the agent."
+        return "GOOGLE_API_KEY not found. Add it to your .env file to enable the agent."
 
     top_reasons = ", ".join([
         format_feature_label(f, v) for f, v in zip(shap_df['Feature'], shap_df['Value'])
@@ -383,7 +383,7 @@ Your task:
             config={"tools": [check_retention_priority, draft_retention_email]}
         )
     except Exception as e:
-        return f"⚠️ Agent call failed with an error:\n\n```\n{type(e).__name__}: {e}\n```"
+        return f"Agent call failed with an error:\n\n```\n{type(e).__name__}: {e}\n```"
 
     text = response.text
 
@@ -399,7 +399,7 @@ Your task:
 
     if not text:
         return (
-            "⚠️ The agent call succeeded but returned an empty response "
+            "The agent call succeeded but returned an empty response "
             "(a known issue with some Gemini model versions after a tool call). "
             f"Finish reason: {getattr(response.candidates[0], 'finish_reason', 'unknown') if response.candidates else 'no candidates'}. "
             "Try clicking Run again, or switch the model to 'gemini-3.6-pro' in the code."
@@ -411,7 +411,7 @@ Your task:
 # ---------------------------------------------------------
 # Header
 # ---------------------------------------------------------
-st.markdown('<div class="main-header">📊 Customer Segmentation & Churn Risk Predictor</div>', unsafe_allow_html=True)
+st.markdown('<div class="main-header">📊 Churn Pilot AI</div>', unsafe_allow_html=True)
 st.markdown('<div class="sub-header">Enter a customer\'s details to see which behavioral segment they belong to and their churn risk.</div>', unsafe_allow_html=True)
 
 # ---------------------------------------------------------
